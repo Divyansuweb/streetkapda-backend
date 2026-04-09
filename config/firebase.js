@@ -16,36 +16,36 @@ const initFirebase = () => {
     let serviceAccount = null;
     
     // // Method 1: Check for individual env variables (recommended for production)
-    // if (process.env.FIREBASE_PROJECT_ID && 
-    //     process.env.FIREBASE_CLIENT_EMAIL && 
-    //     process.env.FIREBASE_PRIVATE_KEY) {
+    if (process.env.FIREBASE_PROJECT_ID && 
+        process.env.FIREBASE_CLIENT_EMAIL && 
+        process.env.FIREBASE_PRIVATE_KEY) {
       
-    //   serviceAccount = {
-    //     projectId: process.env.FIREBASE_PROJECT_ID,
-    //     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    //     privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-    //   };
-    //   logger.info('Firebase initialized from environment variables');
-    // }
+      serviceAccount = {
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      };
+      logger.info('Firebase initialized from environment variables');
+    }
 
     // In your firebase.js, update the private key handling:
-if (process.env.FIREBASE_PROJECT_ID && 
-    process.env.FIREBASE_CLIENT_EMAIL && 
-    process.env.FIREBASE_PRIVATE_KEY) {
+// if (process.env.FIREBASE_PROJECT_ID && 
+//     process.env.FIREBASE_CLIENT_EMAIL && 
+//     process.env.FIREBASE_PRIVATE_KEY) {
   
-  // Handle private key properly for Render
-  let privateKey = process.env.FIREBASE_PRIVATE_KEY;
-  // If the key contains literal \n, replace them with actual newlines
-  if (privateKey.includes('\\n')) {
-    privateKey = privateKey.replace(/\\n/g, '\n');
-  }
+//   // Handle private key properly for Render
+//   let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+//   // If the key contains literal \n, replace them with actual newlines
+//   if (privateKey.includes('\\n')) {
+//     privateKey = privateKey.replace(/\\n/g, '\n');
+//   }
   
-  serviceAccount = {
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: privateKey,
-  };
-}
+//   serviceAccount = {
+//     projectId: process.env.FIREBASE_PROJECT_ID,
+//     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+//     privateKey: privateKey,
+//   };
+// }
     // Method 2: Check for JSON string in env variable
     else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
       try {
