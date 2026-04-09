@@ -1,3 +1,4 @@
+
 const router = require('express').Router();
 const { Settings } = require('../models');
 const { protect, adminOnly } = require('../middleware/auth');
@@ -8,6 +9,17 @@ router.get('/key/:key', async (req, res) => {
   try {
     const s = await Settings.findOne({ key: req.params.key });
     res.json({ success: true, key: req.params.key, value: s?.value ?? null });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── GET COD cities (public) ───────────────────────────────────
+router.get('/cod-cities', async (req, res) => {
+  try {
+    const s = await Settings.findOne({ key: 'cod_cities' });
+    const cities = s?.value || ['Ahmedabad'];
+    res.json({ success: true, cities });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

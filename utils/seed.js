@@ -1,3 +1,4 @@
+
 const { User, Settings } = require('../models');
 
 const DEFAULT_SETTINGS = [
@@ -5,6 +6,7 @@ const DEFAULT_SETTINGS = [
   { key: 'serviceable_pincodes', value: [],              label: 'Serviceable Pincodes',    group: 'delivery' },
   { key: 'delivery_charge',      value: 49,              label: 'Delivery Charge (₹)',     group: 'delivery' },
   { key: 'free_delivery_min',    value: 499,             label: 'Free Delivery Above (₹)', group: 'delivery' },
+  { key: 'cod_cities',           value: ['Ahmedabad'], label: 'Cash on Delivery Cities', group: 'delivery' },
   { key: 'privacy_policy',       value: '<h2>Privacy Policy</h2><p>We value your privacy. Street Kapda collects only the information necessary to process your orders. We do not sell your data to third parties. Your payment information is processed securely. For questions, contact us at support@streetkapda.com.</p>', label: 'Privacy Policy', group: 'legal' },
   { key: 'terms_conditions',     value: '<h2>Terms & Conditions</h2><p>By using Street Kapda you agree to our terms. All orders are subject to availability. Prices may change without notice. Returns accepted within 7 days of delivery in original condition. Street Kapda reserves the right to cancel any order.</p>', label: 'Terms & Conditions', group: 'legal' },
   { key: 'about_app',            value: '<h2>About Street Kapda</h2><p>Street Kapda is your one-stop destination for trendy and affordable street fashion. We offer a wide range of men\'s, women\'s and kids\' clothing at the best prices. Our mission is to make fashion accessible to everyone.</p>', label: 'About App', group: 'general' },
@@ -24,7 +26,7 @@ module.exports = async function seed(connection) {
       await User.create({
         name:         process.env.ADMIN_NAME     || 'Street Kapda Admin',
         email:        process.env.ADMIN_EMAIL    || 'admin@streetkapda.com',
-        phone:        '9000000000',
+        phone:        '7802818509',
         password:     process.env.ADMIN_PASSWORD || 'Admin@123',
         role:         'admin',
         referralCode: 'ADMIN001',

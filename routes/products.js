@@ -1,8 +1,11 @@
-const router   = require('express').Router();
+
+const router = require('express').Router();
 const mongoose = require('mongoose');
 const { Product, Review } = require('../models');
 const { protect, adminOnly } = require('../middleware/auth');
-const upload   = require('../middleware/upload');
+const uploadMiddleware = require('../middleware/upload'); // ADD THIS LINE
+const { asyncHandler } = require('../middleware/errorHandler'); // Also add this if not present
+const { logger } = require('../utils/logger'); // Optional but recommended
 
 // ── Helpers ──────────────────────────────────────────────────
 const parseArray = (value) => {
@@ -113,7 +116,7 @@ router.get('/:id/reviews', async (req, res) => {
 });
 
 // ── POST add review ───────────────────────────────────────────
-router.post('/:id/reviews', protect, upload.single('reviewImage'), async (req, res) => {
+router.post('/:id/reviews', protect, uploadMiddleware.single('reviewImage'), async (req, res) => {
   try {
     const { rating, comment } = req.body;
 
@@ -146,17 +149,29 @@ router.post('/:id/reviews', protect, upload.single('reviewImage'), async (req, r
 });
 
 // ── CREATE product (admin) ────────────────────────────────────
-router.post('/', protect, adminOnly, upload.array('images', 5), async (req, res) => {
+router.post('/', protect, adminOnly, uploadMiddleware.array('images', 5), async (req, res) => {
   try {
+    console.log('📸 Received product creation request');
+    console.log('Files received:', req.files?.length || 0);
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
     const newImageFilenames = req.files ? req.files.map((f) => f.filename) : [];
     const parsedSizes  = parseArray(req.body.sizes);
     const parsedColors = parseArray(req.body.colors);
     const existingImgs = parseArray(req.body.existingImages);
     const allImages    = [...existingImgs, ...newImageFilenames];
 
+    // Validate required fields
+    if (!req.body.name || !req.body.description || !req.body.price || !req.body.category) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields: name, description, price, category' 
+      });
+    }
+
     const product = await Product.create({
-      name:          req.body.name,
-      description:   req.body.description,
+      name:          req.body.name.trim(),
+      description:   req.body.description.trim(),
       price:         Number(req.body.price),
       discountPrice: req.body.discountPrice ? Number(req.body.discountPrice) : undefined,
       category:      req.body.category,
@@ -168,14 +183,16 @@ router.post('/', protect, adminOnly, upload.array('images', 5), async (req, res)
       images:        allImages,
     });
 
+    console.log(`✅ Product created: ${product.name}`);
     res.status(201).json({ success: true, product });
   } catch (err) {
+    console.error('Product creation error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ── UPDATE product (admin) ────────────────────────────────────
-router.put('/:id', protect, adminOnly, upload.array('images', 5), async (req, res) => {
+router.put('/:id', protect, adminOnly, uploadMiddleware.array('images', 5), async (req, res) => {
   try {
     const newImageFilenames = req.files ? req.files.map((f) => f.filename) : [];
     const parsedSizes  = parseArray(req.body.sizes);

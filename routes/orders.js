@@ -1,17 +1,34 @@
+
 const router = require('express').Router();
-const { Order, Product, User, WalletTxn, Coupon, Address } = require('../models');
+const { Order, Product, User, WalletTxn, Coupon, Address, Settings } = require('../models');
 const { protect } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { sendNotification } = require('../utils/notification');
 
-// ── Place order ───────────────────────────────────────────────
+// ── Place order (with COD support) ───────────────────────────────
 router.post('/', protect, async (req, res) => {
   try {
     const { items, addressId, subtotal, deliveryCharge,
-            couponCode, couponDiscount, walletAmount, total } = req.body;
+            couponCode, couponDiscount, walletAmount, total, paymentMethod } = req.body;
 
     const address = await Address.findOne({ _id: addressId, userId: req.user._id });
     if (!address) return res.status(404).json({ success: false, message: 'Address not found' });
+
+    let paymentStatus = 'PENDING';
+    let orderStatus = 'PENDING';
+    
+    // Check if COD is allowed
+    if (paymentMethod === 'COD') {
+      const codSettings = await Settings.findOne({ key: 'cod_cities' });
+      const codCities = codSettings?.value || ['Ahmedabad'];
+      
+      if (codCities.includes(address.city)) {
+        paymentStatus = 'COD_PENDING';
+        orderStatus = 'PENDING';
+      } else {
+        return res.status(400).json({ success: false, message: 'Cash on Delivery is not available in your city. Please choose online payment.' });
+      }
+    }
 
     // Deduct wallet
     if (walletAmount > 0) {
@@ -21,9 +38,9 @@ router.post('/', protect, async (req, res) => {
       user.walletBalance -= walletAmount;
       await user.save();
       await WalletTxn.create({
-        userId:      req.user._id,
-        type:        'DEBIT',
-        amount:      walletAmount,
+        userId: req.user._id,
+        type: 'DEBIT',
+        amount: walletAmount,
         description: 'Used for order payment',
       });
     }
@@ -32,15 +49,18 @@ router.post('/', protect, async (req, res) => {
     if (couponCode) await Coupon.findOneAndUpdate({ code: couponCode }, { $inc: { usedCount: 1 } });
 
     const order = await Order.create({
-      userId:         req.user._id,
+      userId: req.user._id,
       items,
-      address:        address.toObject(),
+      address: address.toObject(),
       subtotal,
       deliveryCharge: deliveryCharge || 0,
-      discount:       couponDiscount  || 0,
-      walletAmount:   walletAmount    || 0,
+      discount: couponDiscount || 0,
+      walletAmount: walletAmount || 0,
       total,
       couponCode,
+      orderStatus: orderStatus,
+      'payment.status': paymentStatus,
+      'payment.paymentMethod': paymentMethod,
     });
 
     // Decrement stock
@@ -50,15 +70,23 @@ router.post('/', protect, async (req, res) => {
       });
     }
 
+    // Send notification based on payment method
+    let notificationMessage = '';
+    if (paymentMethod === 'COD') {
+      notificationMessage = `Order #${order._id.toString().slice(-8).toUpperCase()} placed successfully with Cash on Delivery. Our team will confirm your order soon.`;
+    } else {
+      notificationMessage = `Order #${order._id.toString().slice(-8).toUpperCase()} placed successfully. Please upload your payment screenshot.`;
+    }
+
     await sendNotification(req.app, {
-      userId:  req.user._id,
-      title:   'Order Placed! 🛍️',
-      message: `Order #${order._id.toString().slice(-8).toUpperCase()} placed successfully. Please upload your payment screenshot.`,
-      type:    'order',
+      userId: req.user._id,
+      title: 'Order Placed! 🛍️',
+      message: notificationMessage,
+      type: 'order',
       orderId: order._id.toString(),
     });
 
-    res.status(201).json({ success: true, orderId: order._id, order });
+    res.status(201).json({ success: true, orderId: order._id, order, paymentMethod });
   } catch (err) {
     console.error('Place order error:', err);
     res.status(500).json({ success: false, message: err.message });
@@ -109,7 +137,7 @@ router.post('/:id/payment', protect, upload.single('screenshot'), async (req, re
   }
 });
 
-// Create temporary order (before payment)
+// ── Create temporary order (before payment) ─────────────────
 router.post('/temp', protect, async (req, res) => {
   try {
     const { items, addressId, subtotal, deliveryCharge,
@@ -118,7 +146,6 @@ router.post('/temp', protect, async (req, res) => {
     const address = await Address.findOne({ _id: addressId, userId: req.user._id });
     if (!address) return res.status(404).json({ success: false, message: 'Address not found' });
 
-    // Deduct wallet if used
     if (walletAmount > 0) {
       const user = await User.findById(req.user._id);
       if (user.walletBalance < walletAmount)
@@ -145,6 +172,7 @@ router.post('/temp', protect, async (req, res) => {
       couponCode,
       orderStatus: 'PENDING_PAYMENT',
       'payment.status': 'PENDING',
+      'payment.paymentMethod': 'RAZORPAY',
     });
 
     res.status(201).json({ success: true, orderId: order._id });
@@ -154,7 +182,7 @@ router.post('/temp', protect, async (req, res) => {
   }
 });
 
-// Confirm order after payment
+// ── Confirm order after payment ──────────────────────────────
 router.post('/confirm', protect, async (req, res) => {
   try {
     const { tempOrderId, paymentId, signature, razorpayOrderId } = req.body;
@@ -168,7 +196,6 @@ router.post('/confirm', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid order state' });
     }
     
-    // Update order with payment info
     tempOrder.orderStatus = 'VERIFIED';
     tempOrder['payment.status'] = 'VERIFIED';
     tempOrder['payment.paymentId'] = paymentId;
@@ -176,14 +203,12 @@ router.post('/confirm', protect, async (req, res) => {
     tempOrder['payment.signature'] = signature;
     await tempOrder.save();
     
-    // Decrement stock
     for (const item of tempOrder.items) {
       await Product.findByIdAndUpdate(item.productId, {
         $inc: { stock: -item.quantity, sold: item.quantity },
       });
     }
     
-    // Send success notification (ONLY after payment)
     await sendNotification(req.app, {
       userId: tempOrder.userId,
       title: 'Order Placed! 🛍️',
@@ -199,12 +224,11 @@ router.post('/confirm', protect, async (req, res) => {
   }
 });
 
-// Delete temporary order (on payment failure)
+// ── Delete temporary order ───────────────────────────────────
 router.delete('/temp/:id', protect, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (order && order.orderStatus === 'PENDING_PAYMENT') {
-      // Refund wallet if deducted
       if (order.walletAmount > 0) {
         const user = await User.findById(order.userId);
         if (user) {

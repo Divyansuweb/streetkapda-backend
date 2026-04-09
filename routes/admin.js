@@ -61,32 +61,70 @@ router.get('/orders/:id', protect, adminOnly, async (req, res) => {
   }
 });
 
-// ── Update order status ───────────────────────────────────────
+// Update the order status update endpoint
 router.put('/orders/:id/status', protect, adminOnly, async (req, res) => {
   try {
-    const { status } = req.body;
-    const update = { orderStatus: status };
-    if (status === 'DELIVERED') update.deliveredAt = new Date();
+    const { status, note, courierPartner, trackingNumber } = req.body;
+    
+    const update = { 
+      orderStatus: status,
+      $push: {
+        'tracking.statusHistory': {
+          status: status,
+          note: note || '',
+          updatedBy: req.user.name || req.user.email,
+          timestamp: new Date()
+        }
+      }
+    };
+    
+    // Add specific timestamps based on status
+    if (status === 'SHIPPED') {
+      update['tracking.shippedAt'] = new Date();
+      if (courierPartner) update['tracking.courierPartner'] = courierPartner;
+      if (trackingNumber) update['tracking.trackingNumber'] = trackingNumber;
+    }
+    
+    if (status === 'OUT_FOR_DELIVERY') {
+      update['tracking.outForDeliveryAt'] = new Date();
+    }
+    
+    if (status === 'DELIVERED') {
+      update['tracking.deliveredAt'] = new Date();
+      update.deliveredAt = new Date();
+    }
 
     const order = await Order.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!order) return res.status(404).json({ success: false, message: 'Not found' });
 
-    const msgs = {
-      VERIFIED:  'Payment verified! Your order is being prepared. 🎉',
-      SHIPPED:   'Your order has been shipped! 🚚 Track it in the Orders section.',
-      DELIVERED: 'Your order has been delivered! 🎉 Thank you for shopping with Street Kapda.',
-      CANCELLED: 'Your order has been cancelled. Contact support if you need help.',
+    // Status messages for users
+    const statusMessages = {
+      VERIFIED: '✅ Payment verified! Your order is being prepared.',
+      SHIPPED: '🚚 Your order has been shipped! Track your package in real-time.',
+      OUT_FOR_DELIVERY: '🛵 Your order is out for delivery! Get ready to receive your package.',
+      DELIVERED: '🎉 Your order has been delivered! Thank you for shopping with Street Kapda.',
+      CANCELLED: '❌ Your order has been cancelled. Contact support if you need help.'
     };
 
-    if (msgs[status]) {
-      await sendNotification(req.app, {
-        userId:  order.userId,
-        title:   `Order ${status} 📦`,
-        message: msgs[status],
-        type:    'order',
-        orderId: order._id.toString(),
+    // Send real-time notification via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      io.to(order.userId.toString()).emit('order_status_update', {
+        orderId: order._id,
+        status: status,
+        message: statusMessages[status],
+        timestamp: new Date()
       });
     }
+
+    // Send push notification
+    await sendNotification(req.app, {
+      userId: order.userId,
+      title: getNotificationTitle(status),
+      message: statusMessages[status],
+      type: 'order',
+      orderId: order._id.toString(),
+    });
 
     res.json({ success: true, order });
   } catch (err) {
@@ -94,6 +132,146 @@ router.put('/orders/:id/status', protect, adminOnly, async (req, res) => {
   }
 });
 
+// Helper function for notification titles
+function getNotificationTitle(status) {
+  const titles = {
+    VERIFIED: 'Order Verified ✅',
+    SHIPPED: 'Order Shipped 🚚',
+    OUT_FOR_DELIVERY: 'Out for Delivery 🛵',
+    DELIVERED: 'Order Delivered 🎉',
+    CANCELLED: 'Order Cancelled ❌'
+  };
+  return titles[status] || 'Order Update';
+}
+
+// Get order tracking details
+router.get('/orders/:id/tracking', protect, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    
+    // Check authorization
+    if (order.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+    
+    const tracking = {
+      orderId: order._id,
+      orderStatus: order.orderStatus,
+      currentStatus: order.orderStatus,
+      estimatedDelivery: order.tracking?.estimatedDelivery,
+      shippedAt: order.tracking?.shippedAt,
+      outForDeliveryAt: order.tracking?.outForDeliveryAt,
+      deliveredAt: order.tracking?.deliveredAt || order.deliveredAt,
+      courierPartner: order.tracking?.courierPartner,
+      trackingNumber: order.tracking?.trackingNumber,
+      statusHistory: order.tracking?.statusHistory || [],
+      timeline: generateTimeline(order)
+    };
+    
+    res.json({ success: true, tracking });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Generate timeline based on order status
+function generateTimeline(order) {
+  const timeline = [
+    { status: 'Order Placed', completed: true, timestamp: order.createdAt, icon: 'shopping_bag' }
+  ];
+  
+  if (order.payment?.status === 'VERIFIED') {
+    timeline.push({ status: 'Payment Verified', completed: true, timestamp: order.payment.verifiedAt, icon: 'verified' });
+  } else if (order.orderStatus !== 'PENDING') {
+    timeline.push({ status: 'Payment Verified', completed: true, timestamp: order.createdAt, icon: 'verified' });
+  } else {
+    timeline.push({ status: 'Payment Verified', completed: false, icon: 'verified' });
+  }
+  
+  if (order.tracking?.shippedAt) {
+    timeline.push({ status: 'Shipped', completed: true, timestamp: order.tracking.shippedAt, icon: 'local_shipping' });
+  } else if (order.orderStatus === 'SHIPPED' || order.orderStatus === 'OUT_FOR_DELIVERY' || order.orderStatus === 'DELIVERED') {
+    timeline.push({ status: 'Shipped', completed: true, timestamp: order.tracking?.shippedAt || order.updatedAt, icon: 'local_shipping' });
+  } else {
+    timeline.push({ status: 'Shipped', completed: false, icon: 'local_shipping' });
+  }
+  
+  if (order.tracking?.outForDeliveryAt) {
+    timeline.push({ status: 'Out for Delivery', completed: true, timestamp: order.tracking.outForDeliveryAt, icon: 'delivery_dining' });
+  } else if (order.orderStatus === 'OUT_FOR_DELIVERY' || order.orderStatus === 'DELIVERED') {
+    timeline.push({ status: 'Out for Delivery', completed: true, timestamp: order.tracking?.outForDeliveryAt || order.updatedAt, icon: 'delivery_dining' });
+  } else if (order.orderStatus === 'SHIPPED') {
+    timeline.push({ status: 'Out for Delivery', completed: false, icon: 'delivery_dining' });
+  } else {
+    timeline.push({ status: 'Out for Delivery', completed: false, icon: 'delivery_dining' });
+  }
+  
+  if (order.tracking?.deliveredAt || order.deliveredAt) {
+    timeline.push({ status: 'Delivered', completed: true, timestamp: order.tracking?.deliveredAt || order.deliveredAt, icon: 'check_circle' });
+  } else if (order.orderStatus === 'DELIVERED') {
+    timeline.push({ status: 'Delivered', completed: true, timestamp: order.tracking?.deliveredAt || order.updatedAt, icon: 'check_circle' });
+  } else {
+    timeline.push({ status: 'Delivered', completed: false, icon: 'check_circle' });
+  }
+  
+  return timeline;
+}
+
+// Bulk update for shipping (admin)
+router.post('/orders/bulk/ship', protect, adminOnly, async (req, res) => {
+  try {
+    const { orderIds, courierPartner, trackingNumber } = req.body;
+    
+    const updatedOrders = await Order.updateMany(
+      { _id: { $in: orderIds }, orderStatus: 'VERIFIED' },
+      { 
+        $set: { 
+          orderStatus: 'SHIPPED',
+          'tracking.shippedAt': new Date(),
+          'tracking.courierPartner': courierPartner,
+          'tracking.trackingNumber': trackingNumber
+        },
+        $push: {
+          'tracking.statusHistory': {
+            status: 'SHIPPED',
+            note: `Shipped via ${courierPartner}`,
+            updatedBy: req.user.name || req.user.email,
+            timestamp: new Date()
+          }
+        }
+      }
+    );
+    
+    // Send notifications for each order
+    for (const orderId of orderIds) {
+      const order = await Order.findById(orderId);
+      if (order) {
+        const io = req.app.get('io');
+        if (io) {
+          io.to(order.userId.toString()).emit('order_status_update', {
+            orderId: order._id,
+            status: 'SHIPPED',
+            message: '🚚 Your order has been shipped!',
+            timestamp: new Date()
+          });
+        }
+        
+        await sendNotification(req.app, {
+          userId: order.userId,
+          title: 'Order Shipped 🚚',
+          message: `Your order has been shipped via ${courierPartner}`,
+          type: 'order',
+          orderId: order._id.toString(),
+        });
+      }
+    }
+    
+    res.json({ success: true, updated: updatedOrders.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 // ── Verify / Reject payment ───────────────────────────────────
 router.put('/orders/:id/payment', protect, adminOnly, async (req, res) => {
   try {
